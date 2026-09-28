@@ -1,0 +1,5 @@
+/* served by ignidweb's http_serve_file() straight from disk */
+body {
+    background: #111;
+    color: #eee;
+}
