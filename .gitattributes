@@ -1,0 +1,5 @@
+# .ig is Ignid source, but GitHub's language detector (github-linguist) already
+# maps the .ig extension to Modula-3 generic interfaces. Until Ignid has its own
+# entry upstream (see https://github.com/github-linguist/linguist), suppress
+# detection so the repo doesn't misreport itself as Modula-3.
+*.ig linguist-detectable=false
