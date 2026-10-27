@@ -42,6 +42,10 @@ HTTPS, no request timeouts, no path sanitization in `http_serve_file()`. See
 [IGNIDWEB.md](IGNIDWEB.md#important-limitations-on-purpose) for the full list and
 why each one is the way it is.
 
+[Ignid Webengine](https://github.com/endurasolution/ignid-demo/tree/main/webengine)
+covers most of these: request timeouts, strict path sanitization, size limits,
+and binary static files. It's still single-threaded and HTTP-only.
+
 ## `igcurl`
 
 Plain HTTP only — no TLS, so `https://` URLs are rejected. Response bodies are
@@ -97,3 +101,9 @@ changelog/memory for detail if you're curious about the root causes):
   exception-handling state.
 - `{key -> val}` map-literal syntax — previously parsed correctly but had no
   code generation at all, causing a silent runtime crash with no compile error.
+- `sock_recv` no longer crashes the program when the other side resets the
+  connection. `recv()`'s 32-bit error result (-1) was read as a huge positive
+  length, and the terminator was written 4GB past the buffer. Any client that
+  disconnected abruptly mid-request could take down an Ignid server.
+- `ignidweb.ig` no longer hardcodes the developer machine's `d:/Ignid/std.ig`
+  path, so `ignidweb` and `demoweb` work on other machines.

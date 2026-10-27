@@ -30,9 +30,12 @@ Hello, World!
   generator, optimizer, code generator — is written in Ignid itself.
 - **Batteries included.** Records, enums, pattern matching, try/catch, a `map` type,
   real floats, and a small standard library covering strings/lists/math/random/files.
-- **A real (if minimal) web framework.** [`ignidweb`](docs/IGNIDWEB.md) serves plain
-  HTTP straight from a compiled `.exe`, no external server needed, and
-  [`igcurl`](docs/IGCURL.md) fetches and downloads over HTTP like a tiny `curl`.
+- **Web servers in Ignid.** [Ignid Webengine](https://github.com/endurasolution/ignid-demo/tree/main/webengine)
+  is a hardened, Flask-style framework: routes, HTML templates, static files of any
+  type, a debug mode, and a 67-case attack test suite. [`ignidweb`](docs/IGNIDWEB.md)
+  is the minimal original. Both serve HTTP straight from a compiled `.exe`, with no
+  external server needed. [`igcurl`](docs/IGCURL.md) fetches and downloads over
+  HTTP like a tiny `curl`.
 
 ## Installing
 
@@ -61,7 +64,8 @@ a full walkthrough.
 | [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) | Install, compile your first program, the `ignid`/`ignidc` CLI |
 | [docs/LANGUAGE.md](docs/LANGUAGE.md) | Full language reference — types, control flow, functions, records, enums, try/catch, modules |
 | [docs/STDLIB.md](docs/STDLIB.md) | Every built-in function and standard-library function, by category |
-| [docs/IGNIDWEB.md](docs/IGNIDWEB.md) | The `ignidweb` HTTP server framework |
+| [Ignid Webengine](https://github.com/endurasolution/ignid-demo/tree/main/webengine) | Hardened web framework: templates, static files, debug mode, security |
+| [docs/IGNIDWEB.md](docs/IGNIDWEB.md) | The minimal `ignidweb` HTTP server library |
 | [docs/IGCURL.md](docs/IGCURL.md) | The `igcurl` HTTP client / downloader |
 | [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md) | Honest list of current limitations and rough edges |
 | [demos/](demos/) | Runnable example programs, from "hello world" to a full web app |

@@ -3,7 +3,7 @@
 // which wrap Winsock directly in codegen.ig's runtime. Plain HTTP only (no WebSocket),
 // single-threaded (the runtime's heap allocator has no locking, so real OS threads would
 // race on it — see demos/demoweb.ig for the request loop shape, including keep-alive).
-use "d:/Ignid/std.ig":
+use "std.ig":
 
 fn web_listen(int port) -> int [ give sock_listen(port): ]
 fn web_accept(int listener) -> int [ give sock_accept(listener): ]
