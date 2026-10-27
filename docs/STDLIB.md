@@ -43,11 +43,13 @@ relative to your file).
 | `print(s)` / `println(s)` | `text -> int` | raw output, no auto-formatting |
 | `readfile(path)` | `text -> text` | whole file contents; catchable error if missing |
 | `writefile(path, content)` | `text, text -> int` | |
+| `file_size(path)` | `text -> int` | size in bytes, or `-1` if the file doesn't exist or can't be opened (directories included) |
 | `clock()` | `-> int` | milliseconds, monotonic-ish tick count |
 | `system(cmd)` | `text -> int` | run a shell command, returns its exit code |
 | `quit(code)` | `int -> (never returns)` | exit the process immediately |
 | `argc()` / `argv(i)` | `-> int` / `int -> text` | command-line arguments |
 | `lasterror()` | `-> text` | message of the most recently caught error |
+| `heap_used()` | `-> int` | bytes of the 64MB heap handed out so far. Memory is never freed, so a long-running program (a server) can check this and restart itself before it runs out |
 
 ### Sockets (raw TCP — see [IGNIDWEB.md](IGNIDWEB.md) for the server-side wrapper and [IGCURL.md](IGCURL.md) for the HTTP client)
 
@@ -60,6 +62,10 @@ relative to your file).
 | `sock_recv_all(sock)` | `int -> text` (reads until the peer closes; grows as needed) |
 | `sock_send(sock, data)` | `int, text -> int` |
 | `sock_close(sock)` | `int -> int` |
+| `sock_send_file(sock, path, max)` | `int, text, int -> int`: streams up to `max` bytes of a file straight to the socket and returns the bytes sent (`-1` if the file can't be opened). Binary-safe, and uses no heap |
+| `sock_timeout(sock, ms)` | `int, int -> int` (`0` on success): after `ms` milliseconds without progress, `sock_recv` returns `""` and `sock_send` fails, instead of blocking forever |
+
+`sock_recv` returns `""` when the peer closes, resets, or times out.
 
 `sock_recv` / `sock_recv_all` return NUL-terminated text, so a stream carrying an
 embedded NUL byte (binary data) is observed truncated at the first one.

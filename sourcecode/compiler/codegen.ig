@@ -875,6 +875,24 @@ fn gen_ins(text line) -> int [
         when nm == "sock_close" [
             e("pop rcx"): e("call ig_sock_close"): e("push rax"): tpush("i"): give 0:
         ]
+        when nm == "sock_connect" [
+            e("pop rdx"): e("pop rcx"): e("call ig_sock_connect"): e("push rax"): tpush("i"): give 0:
+        ]
+        when nm == "sock_recv_all" [
+            e("pop rcx"): e("call ig_sock_recv_all"): e("push rax"): tpush("s"): give 0:
+        ]
+        when nm == "sock_timeout" [
+            e("pop rdx"): e("pop rcx"): e("call ig_sock_timeout"): e("push rax"): tpush("i"): give 0:
+        ]
+        when nm == "heap_used" [
+            e("call ig_heap_used"): e("push rax"): tpush("i"): give 0:
+        ]
+        when nm == "file_size" [
+            e("pop rcx"): e("call ig_file_size"): e("push rax"): tpush("i"): give 0:
+        ]
+        when nm == "sock_send_file" [
+            e("pop r8"): e("pop rdx"): e("pop rcx"): e("call ig_sock_send_file"): e("push rax"): tpush("i"): give 0:
+        ]
         when nm == "map_new" [
             e("mov ecx, 8"): e("call ig_map_new"): e("push rax"): tpush("map"): give 0:
         ]
@@ -1624,6 +1642,9 @@ fn gen_runtime() -> int [
     e("and rsp, -16"): e("sub rsp, 32"):
     e("mov ecx, 4096"): e("call ig_alloc"): e("mov rdi, rax"):
     e("mov rcx, rsi"): e("mov rdx, rdi"): e("mov r8d, 4095"): e("xor r9d, r9d"): e("call recv"):
+    // recv returns a 32-bit int: SOCKET_ERROR (-1) must be sign-extended, or it reads as
+    // 4294967295 > 0 and the NUL store below lands 4GB past the buffer (crash on peer reset)
+    e("movsxd rax, eax"):
     e("cmp rax, 0"): e("jg .isr_ok"): e("xor eax, eax"):
     el(".isr_ok: mov byte [rdi + rax], 0"):
     e("mov rax, rdi"):
@@ -1636,6 +1657,7 @@ fn gen_runtime() -> int [
     e("and rsp, -16"): e("sub rsp, 32"):
     e("mov rcx, rdi"): e("call ig_strlen"):
     e("mov rcx, rsi"): e("mov rdx, rdi"): e("mov r8d, eax"): e("xor r9d, r9d"): e("call send"):
+    e("movsxd rax, eax"):  // 32-bit result; keep SOCKET_ERROR negative
     e("lea rsp, [rbp-16]"): e("pop rdi"): e("pop rsi"): e("pop rbp"): e("ret"):
 
     // ig_sock_close(rcx=sock) -> rax = result
@@ -1646,6 +1668,135 @@ fn gen_runtime() -> int [
     e("mov rcx, rsi"): e("mov edx, 1"): e("call shutdown"):
     e("mov rcx, rsi"): e("call closesocket"):
     e("lea rsp, [rbp-8]"): e("pop rsi"): e("pop rbp"): e("ret"):
+
+    // ig_sock_timeout(rcx=sock, rdx=ms) -> rax = 0 on success. Sets SO_RCVTIMEO and
+    // SO_SNDTIMEO so a silent peer can't block recv/send forever; a timed-out
+    // recv then reports "" exactly like a closed connection.
+    el("ig_sock_timeout:"):
+    e("push rbp"): e("mov rbp, rsp"): e("push rsi"): e("push rdi"):
+    e("mov rsi, rcx"): e("mov edi, edx"):
+    e("and rsp, -16"): e("sub rsp, 48"):
+    e("mov dword [rsp+40], edi"):
+    e("mov rcx, rsi"): e("mov edx, 0xFFFF"): e("mov r8d, 0x1006"): e("lea r9, [rsp+40]"):
+    e("mov qword [rsp+32], 4"): e("call setsockopt"):
+    e("mov rcx, rsi"): e("mov edx, 0xFFFF"): e("mov r8d, 0x1005"): e("lea r9, [rsp+40]"):
+    e("mov qword [rsp+32], 4"): e("call setsockopt"):
+    e("movsxd rax, eax"):
+    e("lea rsp, [rbp-16]"): e("pop rdi"): e("pop rsi"): e("pop rbp"): e("ret"):
+
+    // ig_heap_used() -> rax = bytes of the 64MB bump heap handed out so far
+    // (nothing is ever freed, so long-running programs can watch this and recycle)
+    el("ig_heap_used:"):
+    e("mov rax, [heap_cur]"): e("sub rax, [heap_end]"): e("add rax, 67108864"): e("ret"):
+
+    // ig_file_size(rcx=path) -> rax = size in bytes, or -1 if it can't be opened
+    el("ig_file_size:"):
+    e("push rbp"): e("mov rbp, rsp"): e("push rsi"):
+    e("and rsp, -16"): e("sub rsp, 64"):
+    e("mov edx, 0x80000000"): e("mov r8d, 1"): e("xor r9d, r9d"):
+    e("mov qword [rsp+32], 3"): e("mov qword [rsp+40], 0"): e("mov qword [rsp+48], 0"):
+    e("call CreateFileA"): e("cmp rax, -1"): e("je .ifs_fail"):
+    e("mov rsi, rax"):
+    e("mov rcx, rsi"): e("lea rdx, [fsize]"): e("call GetFileSizeEx"):
+    e("mov rcx, rsi"): e("call CloseHandle"):
+    e("mov rax, [fsize]"): e("jmp .ifs_done"):
+    el(".ifs_fail: mov rax, -1"):
+    el(".ifs_done: lea rsp, [rbp-8]"): e("pop rsi"): e("pop rbp"): e("ret"):
+
+    // ig_sock_send_file(rcx=sock, rdx=path, r8=max bytes) -> rax = bytes sent, or -1 if
+    // the file can't be opened. Streams disk -> socket through a fixed 64KB buffer:
+    // binary-safe (no NUL-terminated text involved) and allocates nothing on the heap.
+    el("ig_sock_send_file:"):
+    e("push rbp"): e("mov rbp, rsp"):
+    e("push rbx"): e("push rsi"): e("push rdi"): e("push r12"): e("push r13"): e("push r14"):
+    e("mov rbx, rcx"): e("mov rdi, r8"): e("xor r12d, r12d"):
+    e("and rsp, -16"): e("sub rsp, 64"):
+    e("mov rcx, rdx"): e("mov edx, 0x80000000"): e("mov r8d, 1"): e("xor r9d, r9d"):
+    e("mov qword [rsp+32], 3"): e("mov qword [rsp+40], 0"): e("mov qword [rsp+48], 0"):
+    e("call CreateFileA"): e("cmp rax, -1"): e("jne .isf_open"):
+    e("mov r12, -1"): e("jmp .isf_ret"):
+    el(".isf_open: mov rsi, rax"):
+    el(".isf_loop: test rdi, rdi"): e("jle .isf_close"):
+    e("mov r8, rdi"): e("cmp r8, 65536"): e("jle .isf_rd"): e("mov r8d, 65536"):
+    el(".isf_rd: mov rcx, rsi"): e("lea rdx, [sendfile_buf]"): e("lea r9, [written]"):
+    e("mov qword [rsp+32], 0"): e("call ReadFile"):
+    e("test eax, eax"): e("jz .isf_close"):
+    e("mov r13d, dword [written]"): e("test r13, r13"): e("jz .isf_close"):
+    e("sub rdi, r13"): e("xor r14d, r14d"):
+    el(".isf_snd: cmp r14, r13"): e("jge .isf_loop"):
+    e("mov rcx, rbx"): e("lea rdx, [sendfile_buf]"): e("add rdx, r14"):
+    e("mov r8, r13"): e("sub r8, r14"): e("xor r9d, r9d"): e("call send"):
+    e("movsxd rax, eax"): e("test rax, rax"): e("jle .isf_close"):
+    e("add r14, rax"): e("add r12, rax"): e("jmp .isf_snd"):
+    el(".isf_close: mov rcx, rsi"): e("call CloseHandle"):
+    el(".isf_ret: mov rax, r12"):
+    e("lea rsp, [rbp-48]"):
+    e("pop r14"): e("pop r13"): e("pop r12"): e("pop rdi"): e("pop rsi"): e("pop rbx"): e("pop rbp"): e("ret"):
+
+    // ig_sock_connect(rcx=host, rdx=port) -> rax = connected socket handle, or 0 on failure.
+    // Resolves the hostname via getaddrinfo (DNS), forces IPv4, connects a stream socket.
+    el("ig_sock_connect:"):
+    e("push rbp"): e("mov rbp, rsp"):
+    e("push rbx"): e("push rsi"): e("push rdi"): e("push r12"): e("push r13"): e("push r14"):
+    e("mov rsi, rcx"):                              // rsi = host text
+    e("mov r13, rdx"):                              // r13 = port (int)
+    e("and rsp, -16"): e("sub rsp, 96"):
+    e("mov ecx, 0x0202"): e("lea rdx, [wsadata]"): e("call WSAStartup"):
+    e("mov rcx, r13"): e("call ig_int_to_str"): e("mov r14, rax"):   // r14 = port as service string
+    // zero a 48-byte addrinfo hints struct at [rsp+32]
+    e("lea rdi, [rsp+32]"): e("xor eax, eax"): e("mov ecx, 6"): e("rep stosq"):
+    e("mov dword [rsp+36], 2"):                     // ai_family   = AF_INET
+    e("mov dword [rsp+40], 1"):                     // ai_socktype = SOCK_STREAM
+    e("mov dword [rsp+44], 6"):                     // ai_protocol = IPPROTO_TCP
+    e("mov qword [rsp+80], 0"):                     // result pointer slot
+    e("mov rcx, rsi"): e("mov rdx, r14"): e("lea r8, [rsp+32]"): e("lea r9, [rsp+80]"): e("call getaddrinfo"):
+    e("test eax, eax"): e("jnz .isc_fail"):
+    e("mov rbx, [rsp+80]"): e("test rbx, rbx"): e("jz .isc_fail"):
+    e("mov ecx, [rbx+4]"): e("mov edx, [rbx+8]"): e("mov r8d, [rbx+12]"): e("call socket"):
+    e("mov r12, rax"):                              // r12 = socket handle
+    e("mov rcx, r12"): e("mov rdx, [rbx+32]"): e("mov r8, [rbx+16]"): e("call connect"):
+    e("mov r13d, eax"):                             // r13 = connect() result
+    e("mov rcx, rbx"): e("call freeaddrinfo"):
+    e("test r13d, r13d"): e("jnz .isc_closefail"):
+    e("mov rax, r12"): e("jmp .isc_done"):
+    el(".isc_closefail: mov rcx, r12"): e("call closesocket"):
+    el(".isc_fail: xor eax, eax"):
+    el(".isc_done:"):
+    e("lea rsp, [rbp-48]"):
+    e("pop r14"): e("pop r13"): e("pop r12"): e("pop rdi"): e("pop rsi"): e("pop rbx"):
+    e("pop rbp"): e("ret"):
+
+    // ig_sock_recv_all(rcx=sock) -> rax = text: drains the socket until the peer closes,
+    // accumulating into a heap buffer that doubles as needed. NUL-terminated (so a body
+    // containing an embedded NUL byte — i.e. binary content — is observed truncated).
+    el("ig_sock_recv_all:"):
+    e("push rbp"): e("mov rbp, rsp"):
+    e("push rbx"): e("push rsi"): e("push rdi"): e("push r12"): e("push r13"): e("push r14"):
+    e("mov rsi, rcx"):                              // rsi = sock
+    e("and rsp, -16"): e("sub rsp, 48"):
+    e("mov ecx, 65536"): e("call ig_alloc"): e("mov rdi, rax"):   // rdi = buffer base
+    e("mov rbx, 65536"):                            // rbx = capacity
+    e("xor r12, r12"):                             // r12 = bytes received so far
+    el(".sra_loop:"):
+    e("mov rax, rbx"): e("sub rax, r12"): e("sub rax, 1"): e("cmp rax, 4096"): e("jae .sra_recv"):
+    // grow: allocate 2*capacity and copy the r12 live bytes across
+    e("lea rcx, [rbx*2]"): e("call ig_alloc"): e("mov r13, rax"):
+    e("xor r9, r9"):
+    el(".sra_cp: cmp r9, r12"): e("jae .sra_cpd"):
+    e("mov r8b, [rdi+r9]"): e("mov [r13+r9], r8b"): e("inc r9"): e("jmp .sra_cp"):
+    el(".sra_cpd: mov rdi, r13"): e("add rbx, rbx"):
+    el(".sra_recv:"):
+    e("mov rcx, rsi"): e("lea rdx, [rdi+r12]"):
+    e("mov r8, rbx"): e("sub r8, r12"): e("sub r8, 1"):
+    e("xor r9d, r9d"): e("call recv"):
+    e("movsxd rax, eax"):
+    e("test rax, rax"): e("jle .sra_done"):
+    e("add r12, rax"): e("jmp .sra_loop"):
+    el(".sra_done:"):
+    e("mov byte [rdi+r12], 0"): e("mov rax, rdi"):
+    e("lea rsp, [rbp-48]"):
+    e("pop r14"): e("pop r13"): e("pop r12"): e("pop rdi"): e("pop rsi"): e("pop rbx"):
+    e("pop rbp"): e("ret"):
 
     // ===== minimal map (text-keyed, linear-scan association array) =====
     // header layout: [0]=count [8]=capacity [16]=keys_ptr [24]=values_ptr
@@ -1859,6 +2010,7 @@ fn gen_data() -> int [
     el("g_exc_top: resq 1"): el("g_exc_rbp: resq 64"): el("g_exc_rsp: resq 64"): el("g_exc_tgt: resq 64"):
     el("g_last_error: resq 1"):
     el("wsadata: resb 512"):
+    el("sendfile_buf: resb 65536"):
     el("filepos: resq 1"):
     el("coro_ready: resq 1"): el("coro_current: resq 1"): el("sched_ctx: resq 1"):
     let int j = 1:
@@ -1878,7 +2030,7 @@ start [
     el("default rel"):
     el("global ig_start"):
     el("extern GetStdHandle, WriteFile, ReadFile, ExitProcess, VirtualAlloc, CreateFileA, GetFileSizeEx, CloseHandle, GetTickCount, CreateProcessA, WaitForSingleObject, GetExitCodeProcess, GetCommandLineA, SetFilePointerEx, GetEnvironmentVariableA, GetModuleFileNameA, SetConsoleOutputCP, SetConsoleCP"):
-    el("extern WSAStartup, WSAGetLastError, socket, bind, listen, accept, recv, send, closesocket, shutdown"):
+    el("extern WSAStartup, WSAGetLastError, socket, bind, listen, accept, recv, send, closesocket, shutdown, connect, getaddrinfo, freeaddrinfo, setsockopt"):
     el("section .text"):
     el("ig_start:"):
     e("sub rsp, 40"):

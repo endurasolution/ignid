@@ -1026,6 +1026,12 @@ start [
     sym_set("sock_recv",   "fn"): sym_set("sock_recv(ret)",   "text"):
     sym_set("sock_send",   "fn"): sym_set("sock_send(ret)",   "int"):
     sym_set("sock_close",  "fn"): sym_set("sock_close(ret)",  "int"):
+    sym_set("sock_connect",   "fn"): sym_set("sock_connect(ret)",   "int"):
+    sym_set("sock_recv_all",  "fn"): sym_set("sock_recv_all(ret)",  "text"):
+    sym_set("sock_timeout",   "fn"): sym_set("sock_timeout(ret)",   "int"):
+    sym_set("heap_used",      "fn"): sym_set("heap_used(ret)",      "int"):
+    sym_set("file_size",      "fn"): sym_set("file_size(ret)",      "int"):
+    sym_set("sock_send_file", "fn"): sym_set("sock_send_file(ret)", "int"):
     sym_set("map_new",      "fn"): sym_set("map_new(ret)",      "map"):
     sym_set("map_set",      "fn"): sym_set("map_set(ret)",      "map"):
     sym_set("map_get_text", "fn"): sym_set("map_get_text(ret)", "text"):
